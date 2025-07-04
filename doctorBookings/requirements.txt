@@ -1,5 +1,0 @@
-fastapi
-mangum
-boto3
-pydantic
-pydantic[email]
