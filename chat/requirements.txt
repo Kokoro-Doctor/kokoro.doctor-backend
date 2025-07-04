@@ -1,0 +1,6 @@
+fastapi
+mangum
+boto3
+requests
+langchain_ollama
+langchain
