@@ -8,8 +8,11 @@ from boto3.dynamodb.conditions import Key
 from typing import Optional, List
 from enum import Enum
 import base64
+import mimetypes
+import urllib.parse
 import os
 import logging
+
 
 
 # Set up logging
@@ -48,6 +51,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
+
 # ---- Models ----
 class UploadDoc(BaseModel):
     filename: str
@@ -55,15 +59,17 @@ class UploadDoc(BaseModel):
 
 class DoctorProfileUpdate(BaseModel):
     email: EmailStr
-    specialization: str
-    experience: str
-    fees: int
-    timings: str
+    specialization: Optional[str] = None
+    experience: Optional[str] = None
+    fees: Optional[int] = None
+    timings: Optional[str] = None
     licenseNumber: Optional[str] = None
     registrationId: Optional[str] = None
     affiliation: Optional[str] = None
     degreeCertificate: Optional[UploadDoc] = None
     govtIdProof: Optional[UploadDoc] = None
+    profilePhoto: Optional[UploadDoc] = None 
+
 
 class SubscribeRequest(BaseModel):
     user_email: EmailStr
@@ -94,14 +100,48 @@ handler = Mangum(app)
 # helper functions
 # S3 upload helper
 def upload_doc_to_s3(email, doc_type, filename, base64_content):
-    key = f"doctors/{email}/{doc_type}/{filename}"
-    file_bytes = base64.b64decode(base64_content)
-    s3.put_object(Bucket=BUCKET, Key=key, Body=file_bytes)
-    return f"https://{BUCKET}.s3.amazonaws.com/{key}"
+    try:
+        key = f"doctors/{email}/{doc_type}/{urllib.parse.quote(filename)}"
+        file_bytes = base64.b64decode(base64_content)
 
+        # Guess content-type from filename (jpeg, png, pdf, etc.)
+        content_type, _ = mimetypes.guess_type(filename)
+        if not content_type:
+            content_type = "application/octet-stream"  # fallback
+
+        logger.info(f"Uploading {key} with content_type {content_type}")
+
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=file_bytes,
+            ContentType=content_type,
+        )
+
+        return f"https://{BUCKET}.s3.amazonaws.com/{key}"
+
+    except Exception as e:
+        logger.error(f"Error uploading {filename} to S3: {str(e)}")
+        raise
+
+# Generate presigned URL for S3 object
+# This is useful for fetching documents later
+# e.g. for displaying profile photos or documents
+# in the frontend without making them public
+def generate_presigned_url(key: str, expires_in=3600):
+    try:
+        return s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": BUCKET, "Key": key},
+            ExpiresIn=expires_in
+        )
+    except Exception as e:
+        print("Presigned URL error:", e)
+        return None
+    
 
 # ---- Routes ----
-@app.post("/doctorsService/completeProfile")
+@app.post("/doctorsService/updateProfile")
 def complete_doctor_profile(data: DoctorProfileUpdate):
     try:
         # Check doctor exists
@@ -109,9 +149,11 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
         if "Item" not in doctor:
             raise HTTPException(status_code=404, detail="Doctor not found. Please sign up first.")
 
-        # Docs are ALWAYS optional now
-        doc_updates = {}
+        update_expr_parts = []
+        expr_values = {}
 
+        # Optional S3 uploads
+        doc_updates = {}
         if data.degreeCertificate:
             url = upload_doc_to_s3(
                 email=data.email,
@@ -120,7 +162,6 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
                 base64_content=data.degreeCertificate.base64_content
             )
             doc_updates["degreeCertificate"] = url
-
         if data.govtIdProof:
             url = upload_doc_to_s3(
                 email=data.email,
@@ -129,38 +170,55 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
                 base64_content=data.govtIdProof.base64_content
             )
             doc_updates["govtIdProof"] = url
+        if data.profilePhoto:
+            url = upload_doc_to_s3(
+                email=data.email,
+                doc_type="profilePhoto",
+                filename=data.profilePhoto.filename,
+                base64_content=data.profilePhoto.base64_content
+            )
+            doc_updates["profilePhoto"] = url
 
-        # Prepare UpdateExpression
-        update_expr = """
-            SET specialization = :spec, experience = :exp,
-                fees = :fees, timings = :timings, licenseNumber = :license,
-                registrationId = :regId, affiliation = :aff, onboarded = :ob
-        """
-        expr_values = {
-            ":spec": data.specialization,
-            ":exp": data.experience,
-            ":fees": data.fees,
-            ":timings": data.timings,
-            ":license": data.licenseNumber,
-            ":regId": data.registrationId,
-            ":aff": data.affiliation,
-            ":ob": True  # Always mark as onboarded
+        # Add provided fields to update expression
+        field_map = {
+            "specialization": data.specialization,
+            "experience": data.experience,
+            "fees": data.fees,
+            "timings": data.timings,
+            "licenseNumber": data.licenseNumber,
+            "registrationId": data.registrationId,
+            "affiliation": data.affiliation
         }
 
-        #  Add docs if uploaded
+        for key, val in field_map.items():
+            if val is not None:
+                placeholder = f":{key}"
+                update_expr_parts.append(f"{key} = {placeholder}")
+                expr_values[placeholder] = val
+
+        # Add uploaded documents
         for idx, (key, val) in enumerate(doc_updates.items()):
             placeholder = f":doc{idx}"
-            update_expr += f", {key} = {placeholder}"
+            update_expr_parts.append(f"{key} = {placeholder}")
             expr_values[placeholder] = val
 
-        #  Update DynamoDB
+        # Always mark as onboarded
+        update_expr_parts.append("onboarded = :ob")
+        expr_values[":ob"] = True
+
+        if not update_expr_parts:
+            raise HTTPException(status_code=400, detail="No fields provided to update.")
+
+        update_expr = "SET " + ", ".join(update_expr_parts)
+
+        # Update DynamoDB
         doctors_table.update_item(
             Key={"email": data.email},
             UpdateExpression=update_expr,
             ExpressionAttributeValues=expr_values
         )
 
-        return {"message": "Doctor profile completed successfully."}
+        return {"message": "Doctor profile updated successfully."}
 
     except HTTPException as he:
         raise he
@@ -168,17 +226,35 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+# Fetch all doctors
+# This endpoint returns all doctors with their S3 links converted to presigned URLs
+# so that the frontend can access them without making the S3 objects public.
 @app.post("/doctorsService/fetchDoctors")
 def get_all_doctors():
     try:
         response = doctors_table.scan()
         doctors = response.get("Items", [])
+
+        for doc in doctors:
+            # Fields with S3 links
+            for field in ["profilePhoto", "degreeCertificate", "govtIdProof"]:
+                if field in doc and doc[field]:
+                    try:
+                        s3_key = doc[field].replace(f"https://{BUCKET}.s3.amazonaws.com/", "")
+                        doc[field] = generate_presigned_url(s3_key)
+                    except Exception:
+                        doc[field] = None
+
         return {"doctors": doctors}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Subscribe a user to a doctor
+# It checks if the user and doctor exist, and if not already subscribed,
+# it adds the user to the doctor's subscribers list and vice versa.
 @app.post("/doctorsService/subscribe")
 def subscribe_doctor(data: SubscribeRequest):
     try:
