@@ -59,9 +59,9 @@ Resources:
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
+      # TimeToLiveSpecification:
+      #   AttributeName: ttl
+      #   Enabled: true
 
   # Doctor Bookings Table
   # This table stores bookings made by users for doctors
@@ -92,9 +92,9 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
+      # TimeToLiveSpecification:
+      #   AttributeName: ttl
+      #   Enabled: true
 
   # DynamoDB Table for Chat History
   ChatHistoryTable:

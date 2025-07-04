@@ -28,8 +28,11 @@ class AvailableSlotsRequest(BaseModel):
     doctor_id: str
     date: str  # YYYY-MM-DD
 
-class UserBookingsRequest(BaseModel):
-    user_id: str
+class FetchBookingsRequest(BaseModel):
+    id: str           # email of user or doctor
+    type: str         # "user" or "doctor"
+    days: int         # number of days to look back
+
 
 
 # --------- API Endpoints ---------
@@ -37,10 +40,20 @@ class UserBookingsRequest(BaseModel):
 def book_slot(data: BookSlotInput):
     pk = f"{data.doctor_id}#{data.date}"
     sk = f"{data.start}#{data.user_id}"
-    key = {"PK": pk, "SK": sk}
 
     try:
-        # Check slot users
+        # Step 0: Validate slot exists in availability
+        date_obj = datetime.strptime(data.date, "%Y-%m-%d")
+        day_of_week = date_obj.strftime("%A")  # e.g., "Monday"
+        availability_pk = f"{data.doctor_id}#{day_of_week}"
+
+        availability_res = availability_table.query(KeyConditionExpression=Key("PK").eq(availability_pk))
+        available_slots = [item["SK"].split("-")[0] for item in availability_res.get("Items", [])]
+
+        if data.start not in available_slots:
+            raise HTTPException(status_code=400, detail="Selected slot is not available")
+
+        # Step 1: Check if user already booked or slot is full
         res = booking_table.query(
             KeyConditionExpression=Key("PK").eq(pk) & Key("SK").begins_with(data.start)
         )
@@ -51,8 +64,8 @@ def book_slot(data: BookSlotInput):
         if len(users) >= 5:
             raise HTTPException(400, detail="Slot full")
 
-        expiry = int((datetime.strptime(data.date, "%Y-%m-%d") + timedelta(days=7)).timestamp())
-
+        # Step 2: Save booking
+        expiry = int((date_obj + timedelta(days=7)).timestamp())
         booking_table.put_item(Item={
             "PK": pk,
             "SK": sk,
@@ -63,9 +76,13 @@ def book_slot(data: BookSlotInput):
             "ttl": expiry
         })
         return {"message": "Slot booked"}
+    
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.exception("Booking failed")
         raise HTTPException(500, detail=str(e))
+
 
 
 @app.post("/doctorBookings/cancel")
@@ -112,20 +129,40 @@ def get_available_slots(data: AvailableSlotsRequest):
         })
     return {"slots": result}
 
-
-
-@app.post("/doctorBookings/user")
-def get_user_bookings(data: UserBookingsRequest):
+# Fetch bookings for a doctor or user
+# type: "doctor" for doctor bookings, "user" for user bookings
+@app.post("/doctorBookings/fetchBookings")
+def fetch_bookings(data: FetchBookingsRequest):
     today = datetime.utcnow().date()
-    res = booking_table.query(
-        IndexName="GSI_UserBookings",
-        KeyConditionExpression=Key("user_id").eq(data.user_id)
-    )
-    items = [
-        item for item in res.get("Items", [])
-        if (today - datetime.strptime(item["date"], "%Y-%m-%d").date()).days <= 7
-    ]
-    return {"bookings": items}
+    all_bookings = []
+
+    try:
+        if data.type == "doctor":
+            # Scan by partition key for last N days
+            for i in range(data.days):
+                date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                pk = f"{data.id}#{date}"
+                res = booking_table.query(KeyConditionExpression=Key("PK").eq(pk))
+                all_bookings.extend(res.get("Items", []))
+
+        elif data.type == "user":
+            res = booking_table.query(
+                IndexName="GSI_UserBookings",
+                KeyConditionExpression=Key("user_id").eq(data.id)
+            )
+            for item in res.get("Items", []):
+                booking_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
+                if (today - booking_date).days <= data.days:
+                    all_bookings.append(item)
+
+        else:
+            raise HTTPException(status_code=400, detail="Invalid type: must be 'doctor' or 'user'")
+
+        return {"bookings": all_bookings}
+
+    except Exception as e:
+        logger.exception("Failed to fetch bookings")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --------- AWS Lambda Handler ---------
