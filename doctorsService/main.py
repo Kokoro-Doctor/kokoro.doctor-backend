@@ -76,9 +76,8 @@ class SubscribeRequest(BaseModel):
     doctor_email: EmailStr
 
 class AvailabilitySlot(BaseModel):
-    start: str  # e.g. "10:00"
-    end: str    # e.g. "10:30"
-
+    start: str  # e.g. "09:00"
+    end: str    # e.g. "09:30"
 
 class WeekDay(str, Enum):
     Monday = "Monday"
@@ -89,10 +88,16 @@ class WeekDay(str, Enum):
     Saturday = "Saturday"
     Sunday = "Sunday"
 
-class AvailabilityInput(BaseModel):
+class DoctorSlotsSetRequest(BaseModel):
     doctor_id: str
     day: WeekDay
     slots: List[AvailabilitySlot]
+
+class DoctorSlotUpdateRequest(BaseModel):
+    doctor_id: str
+    day: WeekDay
+    slot: AvailabilitySlot
+    available: Optional[bool] = True  # default: enable
 
 
 handler = Mangum(app)
@@ -306,25 +311,39 @@ def subscribe_doctor(data: SubscribeRequest):
 
 # set availability for a doctor
 @app.post("/doctorsService/setSlots")
-def set_availability(data: AvailabilityInput):
+def set_availability(data: DoctorSlotsSetRequest):
     # Step 1: Check if doctor exists
     doctor = doctors_table.get_item(Key={"email": data.doctor_id})
     if "Item" not in doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    # Step 2: Delete existing slots for that doctor and day
+    # Step 2: Directly upsert each slot with 'available': True
     pk = f"{data.doctor_id}#{data.day}"
-    existing = availability_table.query(
-        KeyConditionExpression=Key("PK").eq(pk)
-    )
-    for item in existing.get("Items", []):
-        availability_table.delete_item(Key={"PK": pk, "SK": item["SK"]})
 
-    # Step 3: Add new slots
     for slot in data.slots:
+        sk = f"{slot.start}-{slot.end}"
         availability_table.put_item(Item={
             "PK": pk,
-            "SK": f"{slot.start}-{slot.end}"
+            "SK": sk,
+            "available": True
         })
 
     return {"message": f"Availability for {data.day} set successfully."}
+
+# Update availability slot for a doctor
+# This endpoint allows enabling or disabling a specific slot for a doctor on a given day.
+@app.post("/doctorsService/updateSlot")
+def update_slot(data: DoctorSlotUpdateRequest):
+    pk = f"{data.doctor_id}#{data.day}"
+    sk = f"{data.slot.start}-{data.slot.end}"
+
+    try:
+        availability_table.put_item(Item={
+            "PK": pk,
+            "SK": sk,
+            "available": data.available  # 👈 true/false
+        })
+        return {"message": f"Slot {'enabled' if data.available else 'disabled'} successfully"}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
