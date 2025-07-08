@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import boto3
+import os
 import uuid
 from mangum import Mangum
 import logging
@@ -38,9 +39,11 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 
 
 # AWS Configuration
-#S3_BUCKET_NAME = "kokoro-doctor-documents"
-S3_BUCKET_NAME = "doctorFiles3Bucker" #s3-Bucket Name
-DYNAMO_TABLE_NAME = "DoctorRegistrationsDB" # DynamoDB Table Name
+# S3_BUCKET_NAME = "kokoro-doctor-documents"
+# DYNAMO_TABLE_NAME = "DoctorRegistrationTable" # DynamoDB Table Name
+
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET", "kokoro-doctor-documents")
+DYNAMO_TABLE_NAME = os.environ.get("DOCTOR_REGISTRATION_TABLE", "DoctorRegistrationTable")
 
 s3_client = boto3.client("s3")
 dynamo_resource = boto3.resource("dynamodb")
