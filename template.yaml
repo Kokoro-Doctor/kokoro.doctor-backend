@@ -126,6 +126,20 @@ Resources:
           KeyType: HASH # Partition Key
       BillingMode: PAY_PER_REQUEST
 
+  # DynamoDB Table for DoctorRegistration
+  # This table stores registration details for doctors
+  DoctorRegistrationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: DoctorRegistrationTable
+      AttributeDefinitions:
+        - AttributeName: doctor_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: doctor_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
   ## IAM Role for Lambda
   LambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -254,6 +268,21 @@ Resources:
       Environment:
         Variables:
           S3_BUCKET: kokoro-medilocker
+
+  DoctorRegistrationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DoctorRegistrationLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./doctorRegistration/
+      Environment:
+        Variables:
+          DOCTOR_REGISTRATION_TABLE: "DoctorRegistrationTable" # Use the new table
+          S3_BUCKET: kokoro-doctor-documents # Use the existing S3 bucket for doctor documents
 
   ## API Gateway
   ApiGateway:
@@ -439,6 +468,37 @@ Resources:
                 httpMethod: POST
                 type: aws_proxy
 
+
+          /doctorRegistration/{proxy+}:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorRegistrationLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+
   ## Lambda Permissions
   AuthLambdaPermission:
     Type: AWS::Lambda::Permission
@@ -487,3 +547,13 @@ Resources:
       FunctionName: !Ref MediLockerLambda
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/medilocker/*"
+
+  
+  DoctorRegistrationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DoctorRegistrationLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/doctorRegistration/*"
+
