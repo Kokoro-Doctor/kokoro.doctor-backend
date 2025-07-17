@@ -9,7 +9,6 @@ import json
 import requests
 from datetime import datetime, timezone
 import logging
-import re
 
 # Configure Logging
 logger = logging.getLogger()
@@ -19,6 +18,7 @@ logger.setLevel(logging.INFO)
 DYNAMODB_TABLE = os.getenv("DYNAMODB_TABLE")
 OLLAMA_API = os.getenv("OLLAMA_API")
 CERT_PATH = "kokoro.doctor.fullchain.pem"
+RAG_SERVER_URL = os.getenv("RAG_SERVER_URL")  # EC2 RAG FastAPI URL, e.g., http://13.203.X.X:8000/rag
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(DYNAMODB_TABLE)
@@ -26,7 +26,7 @@ table = dynamodb.Table(DYNAMODB_TABLE)
 # FastAPI App Initialization
 app = FastAPI()
 
-origins = ["https://kokoro.doctor"]
+origins = ["https://kokoro.doctor", "http://localhost:8081"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -117,11 +117,43 @@ def call_llm_api(history, user_question, language="en"):
         raise HTTPException(status_code=500, detail="Unknown error")
 
 
+# @app.post("/chat")
+# async def chat(request: ChatRequest):
+#     if not request.message.strip():
+#         raise HTTPException(status_code=400, detail="Message is required")
+#     history = get_chat_history(request.user_id)
+#     ai_response = call_llm_api(history, request.message, request.language)
+#     store_message(request.user_id, request.message, ai_response)
+#     return {"text": ai_response}
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message is required")
+    
+    # Get chat history
     history = get_chat_history(request.user_id)
+
+    # Try RAG first
+    try:
+        logger.info(f"Calling RAG server for user: {request.user_id}")
+        rag_payload = {"message": request.message, "language": request.language}
+        response = requests.post(
+            RAG_SERVER_URL,
+            json=rag_payload,
+            headers={"Content-Type": "application/json"},
+            timeout=15
+        )
+        if response.status_code == 200:
+            rag_response = response.json().get("response", "").strip()
+            if rag_response and rag_response.lower() != "none":
+                store_message(request.user_id, request.message, rag_response)
+                return {"text": rag_response}
+    except Exception as e:
+        logger.warning(f"RAG server call failed: {e}", exc_info=True)
+
+    # Fallback to LLM
+    logger.info(f"Calling LLM API for user: {request.user_id}")
     ai_response = call_llm_api(history, request.message, request.language)
     store_message(request.user_id, request.message, ai_response)
     return {"text": ai_response}

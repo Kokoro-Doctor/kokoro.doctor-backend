@@ -1,4 +1,8 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+
 from pydantic import BaseModel
 from mangum import Mangum
 from typing import List
@@ -10,9 +14,37 @@ app = FastAPI()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
+# --------- AWS Lambda Handler ---------
+handler = Mangum(app)
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://kokoro.doctor", "http://localhost:8081"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+# exception handler for HTTP exceptions
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": "https://kokoro.doctor",
+            "Access-Control-Allow-Credentials": "true"
+        }
+    )
+
+
+# environment variables
 dynamodb = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION"])
 availability_table = dynamodb.Table("DoctorAvailabilityTable")
 booking_table = dynamodb.Table("DoctorBookingsTable")
+
 
 # --------- Models ---------
 class BookSlotInput(BaseModel):
@@ -142,12 +174,14 @@ def get_available_slots(data: AvailableSlotsRequest):
         date_obj = datetime.strptime(data.date, "%Y-%m-%d")
         day = date_obj.strftime("%A")
 
-        # Step 2: Fetch slots from DoctorAvailabilityTable
-        availability_pk = f"{data.doctor_id}#{day}"
+        # Step 2: Match your current PK format: "dr.xyz@gmail.com#WeekDay.Monday"
+        availability_pk = f"{data.doctor_id}#WeekDay.{day}"  # 👈 key fix here
+
+        # Step 3: Fetch slots
         res = availability_table.query(KeyConditionExpression=Key("PK").eq(availability_pk))
         slots = res.get("Items", [])
 
-        # Step 3: Format result
+        # Step 4: Format result
         result = []
         for slot in slots:
             start, end = slot["SK"].split("-")
@@ -158,6 +192,7 @@ def get_available_slots(data: AvailableSlotsRequest):
             })
 
         return {"slots": result}
+
     except Exception as e:
         logger.exception("Failed to fetch available slots")
         raise HTTPException(500, detail=str(e))
@@ -199,5 +234,3 @@ def fetch_bookings(data: FetchBookingsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --------- AWS Lambda Handler ---------
-handler = Mangum(app)
