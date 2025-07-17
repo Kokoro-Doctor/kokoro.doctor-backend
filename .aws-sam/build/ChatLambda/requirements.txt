@@ -4,3 +4,6 @@ boto3
 requests
 langchain_ollama
 langchain
+langchain-community 
+langchain-core
+numpy==1.26.4

@@ -34,7 +34,7 @@ app = FastAPI()
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://kokoro.doctor"],
+    allow_origins=["https://kokoro.doctor", "http://localhost:8081"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -194,6 +194,30 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
             "registrationId": data.registrationId,
             "affiliation": data.affiliation
         }
+        
+        # Check if this is first-time onboarding
+        # If the doctor is not onboarded, we will set all optional fields to null
+        # and mark them as onboarded
+        # This is to ensure that the frontend can show the profile form correctly
+        # and not miss any fields that were not provided
+        # If the doctor is already onboarded, we will only update the provided fields
+        # and not touch the existing fields
+        # This is to ensure that the existing fields are not overwritten with null values
+        # and the doctor can update only the fields they want to change
+        is_first_time = not doctor["Item"].get("onboarded", False)
+
+        if is_first_time:
+            # Ensure all optional fields are set to null if not provided
+            for key in field_map:
+                if field_map[key] is None:
+                    update_expr_parts.append(f"{key} = :{key}_null")
+                    expr_values[f":{key}_null"] = None
+            for key in ["degreeCertificate", "govtIdProof", "profilePhoto"]:
+                if key not in doc_updates:
+                    placeholder = f":{key}_null"
+                    update_expr_parts.append(f"{key} = {placeholder}")
+                    expr_values[placeholder] = None
+
 
         for key, val in field_map.items():
             if val is not None:

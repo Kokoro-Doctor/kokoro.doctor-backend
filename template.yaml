@@ -41,6 +41,27 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
+  # Verification Tokens Table
+  # This table will store verification tokens for user registration and password reset
+  AuthTokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AuthTokensTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: purpose
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+        - AttributeName: purpose
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   # Doctor Availability Table
   # This table will store the availability of doctors
   # It uses a composite key with PK as the doctor's email and SK as the date
@@ -175,8 +196,14 @@ Resources:
       CodeUri: ./auth
       Environment:
         Variables:
-          USERS_TABLE: "Users" # DynamoDB table for user authentication
-          DOCTORS_TABLE: "Doctors" # DynamoDB table for doctor information
+          USERS_TABLE: Users # DynamoDB table for user authentication
+          DOCTORS_TABLE: Doctors # DynamoDB table for doctor information
+          AUTH_TOKENS_TABLE: AuthTokensTable # DynamoDB table for storing verification tokens
+
+          BREVO_SMTP_USER: 91f88b001@smtp-brevo.com # replace with actual user
+          BREVO_SMTP_KEY: PzamcykGpK4fEXwT # replace with actual key
+          BREVO_SMTP_SERVER: smtp-relay.brevo.com
+          BREVO_SMTP_PORT: "587"
 
   DoctorsServiceLambda:
     Type: AWS::Serverless::Function
@@ -224,6 +251,7 @@ Resources:
         Variables:
           DYNAMODB_TABLE: "ChatHistory" #DynamoDB table use for chat history
           OLLAMA_API: "https://kokoro.doctor/ollama" # Replace with the actual Ollama API endpoint
+          RAG_SERVER_URL: http://13.203.1.165:8000/rag
 
   ProcessPaymentLambda:
     Type: AWS::Serverless::Function
@@ -285,7 +313,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -314,7 +342,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -343,7 +371,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -372,7 +400,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
             post:
@@ -401,7 +429,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
             post:
@@ -430,7 +458,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:

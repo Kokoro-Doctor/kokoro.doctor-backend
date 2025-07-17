@@ -1,0 +1,511 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+Description: SAM Template for API Gateway and Lambda Functions.
+
+Resources:
+  ## S3 Bucket
+  MedilockerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: kokoro-medilocker
+
+  DoctorDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: kokoro-doctor-documents
+
+  ## DynamoDB Table
+  # Users Table
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Users
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # Doctors Table
+  DoctorsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Doctors
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # Verification Tokens Table
+  # This table will store verification tokens for user registration and password reset
+  AuthTokensTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AuthTokensTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: purpose
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+        - AttributeName: purpose
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # Doctor Availability Table
+  # This table will store the availability of doctors
+  # It uses a composite key with PK as the doctor's email and SK as the date
+  DoctorAvailabilityTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: DoctorAvailabilityTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      # TimeToLiveSpecification:
+      #   AttributeName: ttl
+      #   Enabled: true
+
+  # Doctor Bookings Table
+  # This table stores bookings made by users for doctors
+  # It includes a Global Secondary Index (GSI) for querying bookings by user_id
+  DoctorBookingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: DoctorBookingsTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI_UserBookings
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      # TimeToLiveSpecification:
+      #   AttributeName: ttl
+      #   Enabled: true
+
+  # DynamoDB Table for Chat History
+  ChatHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ChatHistory
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S # Partition Key (String)
+        - AttributeName: timestamp
+          AttributeType: N # Sort Key (Number, for efficient sorting)
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH # Partition Key
+        - AttributeName: timestamp
+          KeyType: RANGE # Sort Key
+      BillingMode: PAY_PER_REQUEST
+
+  ## DynamoDB Table for Payments
+  PaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PaymentsTable
+      AttributeDefinitions:
+        - AttributeName: payment_id
+          AttributeType: S # String (Partition Key)
+      KeySchema:
+        - AttributeName: payment_id
+          KeyType: HASH # Partition Key
+      BillingMode: PAY_PER_REQUEST
+
+  ## IAM Role for Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: "*"
+
+  ## Lambda Functions
+  AuthLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AuthLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./auth
+      Environment:
+        Variables:
+          USERS_TABLE: Users # DynamoDB table for user authentication
+          DOCTORS_TABLE: Doctors # DynamoDB table for doctor information
+          AUTH_TOKENS_TABLE: AuthTokensTable # DynamoDB table for storing verification tokens
+
+  DoctorsServiceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DoctorsServiceLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20 # Increase timeout in seconds
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./doctorsService/
+      Environment:
+        Variables:
+          USERS_TABLE: "Users" # DynamoDB table for user information
+          DOCTORS_TABLE: "Doctors" # DynamoDB table for doctor information
+          DOCTOR_AVAILABILITY_TABLE: "DoctorAvailabilityTable" # DynamoDB table for doctor availability
+          S3_BUCKET: kokoro-doctor-documents # S3 bucket for storing doctor documents
+
+  DoctorBookingsLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DoctorBookingsLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20 # Increase timeout in seconds
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./doctorBookings/
+      Environment:
+        Variables:
+          DOCTOR_AVAILABILITY_TABLE: "DoctorAvailabilityTable" # DynamoDB table for doctor availability
+          DOCTOR_BOOKINGS_TABLE: "DoctorBookingsTable" # DynamoDB table for doctor bookings
+
+  ChatLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ChatLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20 # Increase timeout in seconds
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./chat/
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: "ChatHistory" #DynamoDB table use for chat history
+          OLLAMA_API: "https://kokoro.doctor/ollama" # Replace with the actual Ollama API endpoint
+
+  ProcessPaymentLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ProcessPaymentLambda
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./payment/ # Ensure your process_payment.py file is in this folder
+      Environment:
+        Variables:
+          RAZORPAY_KEY_ID: "rzp_test_sEjmsGQignIpko"
+          RAZORPAY_KEY_SECRET: "qWJOsXCbO8apl69Qc1KEgP5x"
+          DYNAMODB_TABLE_NAME: "PaymentsTable"
+
+  MediLockerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: MediLockerLambda
+      Handler: main.handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 20
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./medilocker/
+      Environment:
+        Variables:
+          S3_BUCKET: kokoro-medilocker
+
+  ## API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: KokoroServiceAPI
+        paths:
+          /auth/{proxy+}:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+          /doctorsService/{proxy+}:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'GET, POST, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorsServiceLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+          /doctorBookings/{proxy+}:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorBookingsLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+          /chat:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+          /process-payment:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProcessPaymentLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+          /medilocker/{proxy+}:
+            options:
+              responses:
+                "200":
+                  description: CORS support
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{ "statusCode": 200 }'
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MediLockerLambda.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+
+  ## Lambda Permissions
+  AuthLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AuthLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/auth/*"
+
+  DoctorsServiceLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DoctorsServiceLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/doctorsService/*"
+
+  DoctorBookingsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DoctorBookingsLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/doctorBookings/*"
+
+  ChatLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ChatLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/chat"
+
+  ProcessPaymentLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessPaymentLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/process-payment"
+
+  MediLockerLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref MediLockerLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/medilocker/*"

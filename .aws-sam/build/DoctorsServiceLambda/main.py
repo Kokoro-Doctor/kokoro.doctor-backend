@@ -8,8 +8,11 @@ from boto3.dynamodb.conditions import Key
 from typing import Optional, List
 from enum import Enum
 import base64
+import mimetypes
+import urllib.parse
 import os
 import logging
+
 
 
 # Set up logging
@@ -31,7 +34,7 @@ app = FastAPI()
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://kokoro.doctor"],
+    allow_origins=["https://kokoro.doctor", "http://localhost:8081"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -48,6 +51,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
+
 # ---- Models ----
 class UploadDoc(BaseModel):
     filename: str
@@ -55,24 +59,25 @@ class UploadDoc(BaseModel):
 
 class DoctorProfileUpdate(BaseModel):
     email: EmailStr
-    specialization: str
-    experience: str
-    fees: int
-    timings: str
+    specialization: Optional[str] = None
+    experience: Optional[str] = None
+    fees: Optional[int] = None
+    timings: Optional[str] = None
     licenseNumber: Optional[str] = None
     registrationId: Optional[str] = None
     affiliation: Optional[str] = None
     degreeCertificate: Optional[UploadDoc] = None
     govtIdProof: Optional[UploadDoc] = None
+    profilePhoto: Optional[UploadDoc] = None 
+
 
 class SubscribeRequest(BaseModel):
     user_email: EmailStr
     doctor_email: EmailStr
 
 class AvailabilitySlot(BaseModel):
-    start: str  # e.g. "10:00"
-    end: str    # e.g. "10:30"
-
+    start: str  # e.g. "09:00"
+    end: str    # e.g. "09:30"
 
 class WeekDay(str, Enum):
     Monday = "Monday"
@@ -83,10 +88,16 @@ class WeekDay(str, Enum):
     Saturday = "Saturday"
     Sunday = "Sunday"
 
-class AvailabilityInput(BaseModel):
+class DoctorSlotsSetRequest(BaseModel):
     doctor_id: str
     day: WeekDay
     slots: List[AvailabilitySlot]
+
+class DoctorSlotUpdateRequest(BaseModel):
+    doctor_id: str
+    day: WeekDay
+    slot: AvailabilitySlot
+    available: Optional[bool] = True  # default: enable
 
 
 handler = Mangum(app)
@@ -94,14 +105,48 @@ handler = Mangum(app)
 # helper functions
 # S3 upload helper
 def upload_doc_to_s3(email, doc_type, filename, base64_content):
-    key = f"doctors/{email}/{doc_type}/{filename}"
-    file_bytes = base64.b64decode(base64_content)
-    s3.put_object(Bucket=BUCKET, Key=key, Body=file_bytes)
-    return f"https://{BUCKET}.s3.amazonaws.com/{key}"
+    try:
+        key = f"doctors/{email}/{doc_type}/{urllib.parse.quote(filename)}"
+        file_bytes = base64.b64decode(base64_content)
 
+        # Guess content-type from filename (jpeg, png, pdf, etc.)
+        content_type, _ = mimetypes.guess_type(filename)
+        if not content_type:
+            content_type = "application/octet-stream"  # fallback
+
+        logger.info(f"Uploading {key} with content_type {content_type}")
+
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=file_bytes,
+            ContentType=content_type,
+        )
+
+        return f"https://{BUCKET}.s3.amazonaws.com/{key}"
+
+    except Exception as e:
+        logger.error(f"Error uploading {filename} to S3: {str(e)}")
+        raise
+
+# Generate presigned URL for S3 object
+# This is useful for fetching documents later
+# e.g. for displaying profile photos or documents
+# in the frontend without making them public
+def generate_presigned_url(key: str, expires_in=3600):
+    try:
+        return s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": BUCKET, "Key": key},
+            ExpiresIn=expires_in
+        )
+    except Exception as e:
+        print("Presigned URL error:", e)
+        return None
+    
 
 # ---- Routes ----
-@app.post("/doctorsService/completeProfile")
+@app.post("/doctorsService/updateProfile")
 def complete_doctor_profile(data: DoctorProfileUpdate):
     try:
         # Check doctor exists
@@ -109,9 +154,11 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
         if "Item" not in doctor:
             raise HTTPException(status_code=404, detail="Doctor not found. Please sign up first.")
 
-        # Docs are ALWAYS optional now
-        doc_updates = {}
+        update_expr_parts = []
+        expr_values = {}
 
+        # Optional S3 uploads
+        doc_updates = {}
         if data.degreeCertificate:
             url = upload_doc_to_s3(
                 email=data.email,
@@ -120,7 +167,6 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
                 base64_content=data.degreeCertificate.base64_content
             )
             doc_updates["degreeCertificate"] = url
-
         if data.govtIdProof:
             url = upload_doc_to_s3(
                 email=data.email,
@@ -129,38 +175,79 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
                 base64_content=data.govtIdProof.base64_content
             )
             doc_updates["govtIdProof"] = url
+        if data.profilePhoto:
+            url = upload_doc_to_s3(
+                email=data.email,
+                doc_type="profilePhoto",
+                filename=data.profilePhoto.filename,
+                base64_content=data.profilePhoto.base64_content
+            )
+            doc_updates["profilePhoto"] = url
 
-        # Prepare UpdateExpression
-        update_expr = """
-            SET specialization = :spec, experience = :exp,
-                fees = :fees, timings = :timings, licenseNumber = :license,
-                registrationId = :regId, affiliation = :aff, onboarded = :ob
-        """
-        expr_values = {
-            ":spec": data.specialization,
-            ":exp": data.experience,
-            ":fees": data.fees,
-            ":timings": data.timings,
-            ":license": data.licenseNumber,
-            ":regId": data.registrationId,
-            ":aff": data.affiliation,
-            ":ob": True  # Always mark as onboarded
+        # Add provided fields to update expression
+        field_map = {
+            "specialization": data.specialization,
+            "experience": data.experience,
+            "fees": data.fees,
+            "timings": data.timings,
+            "licenseNumber": data.licenseNumber,
+            "registrationId": data.registrationId,
+            "affiliation": data.affiliation
         }
+        
+        # Check if this is first-time onboarding
+        # If the doctor is not onboarded, we will set all optional fields to null
+        # and mark them as onboarded
+        # This is to ensure that the frontend can show the profile form correctly
+        # and not miss any fields that were not provided
+        # If the doctor is already onboarded, we will only update the provided fields
+        # and not touch the existing fields
+        # This is to ensure that the existing fields are not overwritten with null values
+        # and the doctor can update only the fields they want to change
+        is_first_time = not doctor["Item"].get("onboarded", False)
 
-        #  Add docs if uploaded
+        if is_first_time:
+            # Ensure all optional fields are set to null if not provided
+            for key in field_map:
+                if field_map[key] is None:
+                    update_expr_parts.append(f"{key} = :{key}_null")
+                    expr_values[f":{key}_null"] = None
+            for key in ["degreeCertificate", "govtIdProof", "profilePhoto"]:
+                if key not in doc_updates:
+                    placeholder = f":{key}_null"
+                    update_expr_parts.append(f"{key} = {placeholder}")
+                    expr_values[placeholder] = None
+
+
+        for key, val in field_map.items():
+            if val is not None:
+                placeholder = f":{key}"
+                update_expr_parts.append(f"{key} = {placeholder}")
+                expr_values[placeholder] = val
+
+        # Add uploaded documents
         for idx, (key, val) in enumerate(doc_updates.items()):
             placeholder = f":doc{idx}"
-            update_expr += f", {key} = {placeholder}"
+            update_expr_parts.append(f"{key} = {placeholder}")
             expr_values[placeholder] = val
 
-        #  Update DynamoDB
+        # Always mark as onboarded
+        update_expr_parts.append("onboarded = :ob")
+        expr_values[":ob"] = True
+
+        if not update_expr_parts:
+            raise HTTPException(status_code=400, detail="No fields provided to update.")
+
+        update_expr = "SET " + ", ".join(update_expr_parts)
+
+        # Update DynamoDB
         doctors_table.update_item(
             Key={"email": data.email},
             UpdateExpression=update_expr,
             ExpressionAttributeValues=expr_values
         )
 
-        return {"message": "Doctor profile completed successfully."}
+        return {"message": "Doctor profile updated successfully."}
 
     except HTTPException as he:
         raise he
@@ -168,17 +255,35 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+# Fetch all doctors
+# This endpoint returns all doctors with their S3 links converted to presigned URLs
+# so that the frontend can access them without making the S3 objects public.
 @app.post("/doctorsService/fetchDoctors")
 def get_all_doctors():
     try:
         response = doctors_table.scan()
         doctors = response.get("Items", [])
+
+        for doc in doctors:
+            # Fields with S3 links
+            for field in ["profilePhoto", "degreeCertificate", "govtIdProof"]:
+                if field in doc and doc[field]:
+                    try:
+                        s3_key = doc[field].replace(f"https://{BUCKET}.s3.amazonaws.com/", "")
+                        doc[field] = generate_presigned_url(s3_key)
+                    except Exception:
+                        doc[field] = None
+
         return {"doctors": doctors}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Subscribe a user to a doctor
+# It checks if the user and doctor exist, and if not already subscribed,
+# it adds the user to the doctor's subscribers list and vice versa.
 @app.post("/doctorsService/subscribe")
 def subscribe_doctor(data: SubscribeRequest):
     try:
@@ -230,25 +335,39 @@ def subscribe_doctor(data: SubscribeRequest):
 
 # set availability for a doctor
 @app.post("/doctorsService/setSlots")
-def set_availability(data: AvailabilityInput):
+def set_availability(data: DoctorSlotsSetRequest):
     # Step 1: Check if doctor exists
     doctor = doctors_table.get_item(Key={"email": data.doctor_id})
     if "Item" not in doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    # Step 2: Delete existing slots for that doctor and day
+    # Step 2: Directly upsert each slot with 'available': True
     pk = f"{data.doctor_id}#{data.day}"
-    existing = availability_table.query(
-        KeyConditionExpression=Key("PK").eq(pk)
-    )
-    for item in existing.get("Items", []):
-        availability_table.delete_item(Key={"PK": pk, "SK": item["SK"]})
 
-    # Step 3: Add new slots
     for slot in data.slots:
+        sk = f"{slot.start}-{slot.end}"
         availability_table.put_item(Item={
             "PK": pk,
-            "SK": f"{slot.start}-{slot.end}"
+            "SK": sk,
+            "available": True
         })
 
     return {"message": f"Availability for {data.day} set successfully."}
+
+# Update availability slot for a doctor
+# This endpoint allows enabling or disabling a specific slot for a doctor on a given day.
+@app.post("/doctorsService/updateSlot")
+def update_slot(data: DoctorSlotUpdateRequest):
+    pk = f"{data.doctor_id}#{data.day}"
+    sk = f"{data.slot.start}-{data.slot.end}"
+
+    try:
+        availability_table.put_item(Item={
+            "PK": pk,
+            "SK": sk,
+            "available": data.available  # 👈 true/false
+        })
+        return {"message": f"Slot {'enabled' if data.available else 'disabled'} successfully"}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+

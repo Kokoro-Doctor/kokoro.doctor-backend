@@ -15,13 +15,9 @@
 import logging
 import os
 import re
+from logging import NullHandler
 
-__version__ = '1.38.46'
-
-
-class NullHandler(logging.Handler):
-    def emit(self, record):
-        pass
+__version__ = '1.39.7'
 
 
 # Configure default logger to do nothing
