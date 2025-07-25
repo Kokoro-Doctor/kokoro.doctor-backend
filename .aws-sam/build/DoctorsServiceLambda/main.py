@@ -59,6 +59,7 @@ class UploadDoc(BaseModel):
 
 class DoctorProfileUpdate(BaseModel):
     email: EmailStr
+    description: Optional[str] = None
     specialization: Optional[str] = None
     experience: Optional[str] = None
     fees: Optional[int] = None
@@ -186,6 +187,7 @@ def complete_doctor_profile(data: DoctorProfileUpdate):
 
         # Add provided fields to update expression
         field_map = {
+            "description": data.description,
             "specialization": data.specialization,
             "experience": data.experience,
             "fees": data.fees,

@@ -38,7 +38,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     user_id: str
     message: str
-    language: Optional[str] = "en"
+    language: str = "en"  # Default to English
 
 
 def store_message(user_mail, user_message, bot_message):

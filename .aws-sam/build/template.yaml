@@ -173,6 +173,7 @@ Resources:
           BREVO_SMTP_KEY: PzamcykGpK4fEXwT
           BREVO_SMTP_SERVER: smtp-relay.brevo.com
           BREVO_SMTP_PORT: '587'
+          FAST2SMS_API_KEY: 3saq2ApQZ7jHSWr8PcVhw0uGJLdvzytgDCM6nEOXbN9mFxiB4ePo9q71QVAWwUsa3nSlyfXMZz2R4Y8v
     Metadata:
       SamResourceId: AuthLambda
   DoctorsServiceLambda:
@@ -302,7 +303,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''GET,
                         POST, PUT, DELETE, OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Authorization,
@@ -333,7 +334,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''GET,
                         POST, OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Authorization,
@@ -364,7 +365,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''GET,
                         POST, PUT, DELETE, OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Authorization,
@@ -395,7 +396,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''POST,
                         OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Content-Type'''
@@ -425,7 +426,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''POST,
                         OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Content-Type'''
@@ -455,7 +456,7 @@ Resources:
                   default:
                     statusCode: '200'
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Origin: '''https://kokoro.doctor'''
                       method.response.header.Access-Control-Allow-Methods: '''GET,
                         POST, PUT, DELETE, OPTIONS'''
                       method.response.header.Access-Control-Allow-Headers: '''Authorization,

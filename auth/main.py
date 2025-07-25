@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from mangum import Mangum
+import random
 import os
 import bcrypt
 import jwt
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import smtplib
 from email.message import EmailMessage
+import requests
 
 # Initialize logger
 logger = logging.getLogger()
@@ -30,6 +32,8 @@ smtp_user = os.environ["BREVO_SMTP_USER"]
 smtp_key = os.environ["BREVO_SMTP_KEY"]
 smtp_server = os.environ["BREVO_SMTP_SERVER"]
 smtp_port = int(os.environ["BREVO_SMTP_PORT"])  # convert to int
+
+fast2sms_api_key = os.environ["FAST2SMS_API_KEY"]
 
 
 # FastAPI app initialization
@@ -86,6 +90,14 @@ class PasswordResetConfirm(BaseModel):
     token: str
     new_password: str
 
+class MobileOTPRequest(BaseModel):
+    email: str
+    phoneNumber: str
+
+class MobileOTPVerify(BaseModel):
+    phoneNumber: str
+    otp: str
+
 
 # Utility functions
 def hash_password(password: str) -> str:
@@ -112,13 +124,32 @@ def send_brevo_email(to_email: str, subject: str, body: str):
         raise HTTPException(status_code=500, detail="Failed to send email")
 
 
+def send_otp_sms(phone_number: str, otp: str):
+    url = "https://www.fast2sms.com/dev/bulkV2"
+    headers = {
+        "authorization": fast2sms_api_key
+    }
+    payload = {
+        "variables_values": otp,
+        "route": "q",
+        "numbers": phone_number
+    }
+
+    try:
+        response = requests.post(url, data=payload, headers=headers)
+        response.raise_for_status()
+        logger.info(f"[SMS] OTP sent to {phone_number}: {response.json()}")
+    except requests.RequestException as e:
+        logger.error(f"[SMS] Failed to send OTP: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send OTP SMS")
+
+
 # Mangum handler
 handler = Mangum(app)
 
 # Routes
 @app.post("/auth/user/signup")
 def user_signup(data: UserSignup):
-    logger.info(f"[UserSignup] Received data: {data}")
     try:
         existing = users_table.get_item(Key={"email": data.email})
         logger.info(f"[UserSignup] DynamoDB get_item result: {existing}")
@@ -127,7 +158,6 @@ def user_signup(data: UserSignup):
             raise HTTPException(status_code=400, detail="Email already exists")
 
         hashed = hash_password(data.password)
-        logger.info(f"[UserSignup] Hashed password generated")
 
         users_table.put_item(Item={
             "username": data.username,
@@ -135,8 +165,10 @@ def user_signup(data: UserSignup):
             "password": hashed,
             "phoneNumber": data.phoneNumber,
             "location": data.location,
-            "emailVerified": False
+            "emailVerified": False,
+            "phoneVerified": False
         })
+        logger.info(f"[UserSignup] User {data.email} registered successfully")
 
         # Create token
         token = str(uuid.uuid4())
@@ -155,7 +187,6 @@ def user_signup(data: UserSignup):
         send_brevo_email(data.email, subject, body)
 
         logger.info(f"[UserSignup] Verification email sent to {data.email}")
-        logger.info(f"[UserSignup] User {data.email} registered successfully")
         return {"message": "User registered successfully"}
 
     except HTTPException as he:
@@ -215,6 +246,7 @@ def doctor_signup(data: DoctorSignup):
             "location": data.location,
             "password": hashed,
             "emailVerified": False,
+            "phoneVerified": False,
             "onboarded": False
         })
 
@@ -391,3 +423,61 @@ def reset_password(data: PasswordResetConfirm):
     auth_tokens_table.delete_item(Key={"email": data.email, "purpose": "password_reset"})
 
     return {"message": "Password reset successfully"}
+
+
+
+@app.post("/auth/send-mobile-otp")
+def send_mobile_otp(data: MobileOTPRequest):
+    otp = f"{random.randint(100000, 999999)}"
+    logger.info(f"[SendMobileOTP] OTP for {data.phoneNumber} (User: {data.email}): {otp}")
+
+    # Save to DynamoDB
+    auth_tokens_table.put_item(Item={
+        "email": data.email,
+        "purpose": "mobile_otp",
+        "token": otp,
+        "phoneNumber": data.phoneNumber,
+        "ttl": int((datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp())
+    })
+
+    send_otp_sms(data.phoneNumber, otp)
+    return {"message": "OTP sent to your mobile number"}
+
+
+@app.post("/auth/verify-mobile-otp")
+def verify_mobile_otp(data: MobileOTPVerify):
+    try:
+        res = auth_tokens_table.get_item(Key={
+            "email": data.email,
+            "purpose": "mobile_otp"
+        })
+        item = res.get("Item")
+
+        if not item or item["token"] != data.otp:
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+        # Update phoneVerified flag in user or doctor table
+        if users_table.get_item(Key={"email": data.email}).get("Item"):
+            users_table.update_item(
+                Key={"email": data.email},
+                UpdateExpression="SET phoneVerified = :v",
+                ExpressionAttributeValues={":v": True}
+            )
+        elif doctors_table.get_item(Key={"email": data.email}).get("Item"):
+            doctors_table.update_item(
+                Key={"email": data.email},
+                UpdateExpression="SET phoneVerified = :v",
+                ExpressionAttributeValues={":v": True}
+            )
+
+        # Clean up
+        auth_tokens_table.delete_item(Key={
+            "email": data.email,
+            "purpose": "mobile_otp"
+        })
+
+        return {"message": "Mobile number verified successfully"}
+
+    except Exception as e:
+        logger.exception("[VerifyMobileOTP] Error verifying mobile OTP")
+        raise HTTPException(status_code=500, detail=str(e))

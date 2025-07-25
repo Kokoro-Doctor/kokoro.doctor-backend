@@ -205,6 +205,8 @@ Resources:
           BREVO_SMTP_SERVER: smtp-relay.brevo.com
           BREVO_SMTP_PORT: "587"
 
+          FAST2SMS_API_KEY: "3saq2ApQZ7jHSWr8PcVhw0uGJLdvzytgDCM6nEOXbN9mFxiB4ePo9q71QVAWwUsa3nSlyfXMZz2R4Y8v" # Replace with your actual Fast2SMS API key
+
   DoctorsServiceLambda:
     Type: AWS::Serverless::Function
     Properties:
@@ -313,7 +315,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -342,7 +344,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -371,7 +373,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
@@ -400,7 +402,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
             post:
@@ -429,7 +431,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
             post:
@@ -458,7 +460,7 @@ Resources:
                   default:
                     statusCode: "200"
                     responseParameters:
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Origin: "'https://kokoro.doctor'"
                       method.response.header.Access-Control-Allow-Methods: "'GET, POST, PUT, DELETE, OPTIONS'"
                       method.response.header.Access-Control-Allow-Headers: "'Authorization, Content-Type'"
             post:
